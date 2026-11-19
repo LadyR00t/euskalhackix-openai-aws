@@ -1,3 +1,11 @@
 {
-  "openrouter_api_key": "REDACTED"
+  "openrouter_api_key": "REDACTED",
+  "provider": "openrouter",
+  "api_base_url": "https://openrouter.ai/api/v1/chat/completions",
+  "api_key": "",
+  "judge_model": "",
+  "def_model_l3": "",
+  "def_model_l4": "",
+  "def_model_l5": "",
+  "attacker_model_ladder": []
 }

@@ -2,11 +2,61 @@
 Training "Introducción al pentest de chatbots" in Euskalhack IX edition
 
 # Instalation
-You need to add the API_Key of https://openrouter.ai/ in a config.json which must be hosted in the same directory of the script.
+You can use either:
+
+- OpenRouter (default behavior)
+- Any custom OpenAI-compatible endpoint (for example AWS + LiteLLM / vLLM)
+
+Create a `config.json` in the same directory as the script.
 
 # Usage
 
 python llm_arena.py -h
+
+## OpenRouter mode (default)
+
+```json
+{
+  "openrouter_api_key": "sk-or-..."
+}
+```
+
+Run:
+
+```bash
+python llm_arena.py --level 3 --rounds 5
+```
+
+## Custom OpenAI-compatible endpoint mode
+
+Example `config.json`:
+
+```json
+{
+  "provider": "custom_openai",
+  "api_base_url": "http://<IP_OR_HOST>:4000/v1/chat/completions",
+  "api_key": "your-token",
+  "judge_model": "current",
+  "def_model_l3": "current",
+  "def_model_l4": "current",
+  "def_model_l5": "current",
+  "attacker_model_ladder": ["current"]
+}
+```
+
+Or via CLI:
+
+```bash
+python llm_arena.py \
+  --provider custom_openai \
+  --base-url http://<IP_OR_HOST>:4000/v1/chat/completions \
+  --key your-token \
+  --judge-model current \
+  --def-model-l3 current \
+  --def-model-l4 current \
+  --def-model-l5 current \
+  --attacker-ladder current
+```
 usage: llm_arena.py [-h] [--level N] [--rounds N] [--key SK] [--reset] [--attacker-model MODEL] [--start-rung N]
                     [--anti-loop-rounds N]
 

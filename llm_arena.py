@@ -2,15 +2,16 @@
 LLM Arena — Atacante vs Defensor con Juez
 ==========================================
 Escalada de dificultad en 5 niveles. Memoria persistente por nivel.
-Todo el tráfico LLM pasa por OpenRouter (defensores cross-vendor: Anthropic/Mistral/OpenAI).
+Compatible con OpenRouter y con endpoints OpenAI-compatible personalizados.
 
 INSTALACIÓN:
     pip install requests
 
 CONFIGURACIÓN:
-    Crea un fichero config.json junto al script:
+    OpenRouter:
         { "openrouter_api_key": "sk-or-..." }
-    O exporta la variable de entorno OPENROUTER_API_KEY.
+    Endpoint propio (OpenAI-compatible):
+        { "provider":"custom_openai", "api_base_url":"http://host/v1/chat/completions", "api_key":"..." }
 
 USO RÁPIDO:
     python llm_arena.py --level 1
@@ -27,8 +28,14 @@ from datetime import datetime
 # CONFIGURACIÓN / OPENROUTER
 # ══════════════════════════════════════════════════════════════════════════════
 
-CONFIG_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+# OpenAI-compatible API runtime settings.
+# Defaults keep backward compatibility with OpenRouter.
+API_PROVIDER = "openrouter"  # openrouter | custom_openai
+API_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+API_REFERER = "https://github.com/llm-arena"
+API_TITLE = "LLM Arena"
 
 def load_config():
     cfg = {}
@@ -39,6 +46,17 @@ def load_config():
         except Exception as e:
             print(f"Aviso: no se pudo leer {CONFIG_PATH}: {e}")
     return cfg
+
+def parse_ladder(raw):
+    if not raw:
+        return None
+    if isinstance(raw, list):
+        cleaned = [str(x).strip() for x in raw if str(x).strip()]
+        return cleaned or None
+    if isinstance(raw, str):
+        cleaned = [x.strip() for x in raw.split(",") if x.strip()]
+        return cleaned or None
+    return None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODELOS
@@ -298,7 +316,7 @@ def memory_context(memory):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def call(api_key, system, messages, max_tokens=500, model=None, retries=3):
-    """Llama al endpoint de chat completions de OpenRouter (compatible OpenAI)."""
+    """Llama a un endpoint chat completions OpenAI-compatible."""
     or_messages = [{"role": "system", "content": system}] + messages
     payload_dict = {
         "model": model,
@@ -310,16 +328,20 @@ def call(api_key, system, messages, max_tokens=500, model=None, retries=3):
     }
     payload = json.dumps(payload_dict).encode("utf-8")
 
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    # OpenRouter requires these headers; other providers may ignore them.
+    if API_PROVIDER == "openrouter":
+        headers["HTTP-Referer"] = API_REFERER
+        headers["X-Title"] = API_TITLE
+
     req = urllib.request.Request(
-        OPENROUTER_URL,
+        API_BASE_URL,
         data=payload,
         method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/llm-arena",
-            "X-Title": "LLM Arena",
-        },
+        headers=headers,
     )
 
     last_err = None
@@ -343,7 +365,7 @@ def call(api_key, system, messages, max_tokens=500, model=None, retries=3):
                     payload_dict["max_tokens"] = max_tokens + 300
                     payload = json.dumps(payload_dict).encode("utf-8")
                     req = urllib.request.Request(
-                        OPENROUTER_URL, data=payload, method="POST",
+                        API_BASE_URL, data=payload, method="POST",
                         headers=req.headers,
                     )
                     time.sleep(0.5)
@@ -361,7 +383,7 @@ def call(api_key, system, messages, max_tokens=500, model=None, retries=3):
                 payload_dict.pop("reasoning", None)
                 payload = json.dumps(payload_dict).encode("utf-8")
                 req = urllib.request.Request(
-                    OPENROUTER_URL, data=payload, method="POST",
+                    API_BASE_URL, data=payload, method="POST",
                     headers=req.headers,
                 )
                 continue
@@ -561,13 +583,17 @@ RESPONDE ÚNICAMENTE con JSON válido, sin texto antes ni después, sin backtick
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
+    global API_PROVIDER, API_BASE_URL, API_REFERER, API_TITLE
+    global MODEL_JUDGE_ROUND, MODEL_DEF_L3, MODEL_DEF_L4, MODEL_DEF_L5
+    global ATTACKER_MODEL_LADDER
+
     parser = argparse.ArgumentParser(
         prog="llm_arena.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             f"{BOLD}LLM Arena — Atacante vs Defensor con Juez árbitro{RST}\n"
             "Demuestra ataques de prompt injection escalando dificultad en 5 niveles.\n"
-            "Todo el tráfico LLM pasa por OpenRouter.\n"
+            "Tráfico LLM por OpenRouter o endpoint OpenAI-compatible.\n"
         ),
         epilog=(
             f"{BOLD}NIVELES:{RST}\n"
@@ -580,8 +606,9 @@ def main():
             f"{ATTACKER_ESCALATION_ROUNDS} rondas sin éxito):\n"
             + "\n".join(f"  {i+1}. {m}" for i, m in enumerate(ATTACKER_MODEL_LADDER)) + "\n\n"
             f"{BOLD}CONFIGURACIÓN:{RST}\n"
-            f"  Crea config.json junto al script: {{\"openrouter_api_key\": \"sk-or-...\"}}\n"
-            "  o exporta OPENROUTER_API_KEY.\n\n"
+            f"  OpenRouter: config.json -> {{\"openrouter_api_key\": \"sk-or-...\"}}\n"
+            "  Endpoint propio: --provider custom_openai --base-url <.../chat/completions>\n"
+            "                  + key por --key / LLM_API_KEY / OPENAI_API_KEY.\n\n"
             f"{BOLD}EJEMPLOS:{RST}\n"
             "  python llm_arena.py --level 1\n"
             "  python llm_arena.py --level 3 --rounds 5\n"
@@ -601,7 +628,15 @@ def main():
     )
     parser.add_argument(
         "--key", type=str, default="", metavar="SK",
-        help="API key de OpenRouter (alternativa: config.json u OPENROUTER_API_KEY)"
+        help="API key (OpenRouter o endpoint custom; también config/env)."
+    )
+    parser.add_argument(
+        "--provider", type=str, default="", choices=["openrouter", "custom_openai"],
+        help="Proveedor API: openrouter (default) o custom_openai (endpoint propio)."
+    )
+    parser.add_argument(
+        "--base-url", type=str, default="", metavar="URL",
+        help="Endpoint chat/completions OpenAI-compatible. Ej: http://IP:4000/v1/chat/completions"
     )
     parser.add_argument(
         "--reset", action="store_true",
@@ -610,6 +645,26 @@ def main():
     parser.add_argument(
         "--attacker-model", type=str, default="", metavar="MODEL",
         help="Fuerza un modelo fijo para el atacante (ignora la escala automática)"
+    )
+    parser.add_argument(
+        "--judge-model", type=str, default="", metavar="MODEL",
+        help="Modelo del juez."
+    )
+    parser.add_argument(
+        "--def-model-l3", type=str, default="", metavar="MODEL",
+        help="Override del modelo defensor para nivel 3."
+    )
+    parser.add_argument(
+        "--def-model-l4", type=str, default="", metavar="MODEL",
+        help="Override del modelo defensor para nivel 4."
+    )
+    parser.add_argument(
+        "--def-model-l5", type=str, default="", metavar="MODEL",
+        help="Override del modelo defensor para nivel 5."
+    )
+    parser.add_argument(
+        "--attacker-ladder", type=str, default="", metavar="CSV",
+        help="Lista CSV de modelos atacante (override completo)."
     )
     parser.add_argument(
         "--start-rung", type=int, default=1, metavar="N",
@@ -621,13 +676,93 @@ def main():
     )
     args = parser.parse_args()
 
-    config  = load_config()
-    api_key = (
-        args.key
-        or os.environ.get("OPENROUTER_API_KEY", "")
-        or config.get("openrouter_api_key", "")
-        or "sk-or-XXXXXXX"
+    config = load_config()
+
+    # Runtime provider selection (CLI > env > config > default)
+    API_PROVIDER = (
+        args.provider
+        or os.environ.get("LLM_API_PROVIDER", "")
+        or config.get("provider", "")
+        or API_PROVIDER
+    ).strip()
+
+    # Runtime endpoint selection (CLI > env > config > default)
+    API_BASE_URL = (
+        args.base_url
+        or os.environ.get("LLM_API_BASE_URL", "")
+        or config.get("api_base_url", "")
+        or API_BASE_URL
+    ).strip()
+
+    API_REFERER = (
+        os.environ.get("OPENROUTER_HTTP_REFERER", "")
+        or config.get("openrouter_http_referer", "")
+        or API_REFERER
+    ).strip()
+    API_TITLE = (
+        os.environ.get("OPENROUTER_X_TITLE", "")
+        or config.get("openrouter_x_title", "")
+        or API_TITLE
+    ).strip()
+
+    # Model overrides (CLI > env > config > defaults)
+    MODEL_JUDGE_ROUND = (
+        args.judge_model
+        or os.environ.get("LLM_JUDGE_MODEL", "")
+        or config.get("judge_model", "")
+        or MODEL_JUDGE_ROUND
+    ).strip()
+    MODEL_DEF_L3 = (
+        args.def_model_l3
+        or os.environ.get("LLM_DEF_MODEL_L3", "")
+        or config.get("def_model_l3", "")
+        or MODEL_DEF_L3
+    ).strip()
+    MODEL_DEF_L4 = (
+        args.def_model_l4
+        or os.environ.get("LLM_DEF_MODEL_L4", "")
+        or config.get("def_model_l4", "")
+        or MODEL_DEF_L4
+    ).strip()
+    MODEL_DEF_L5 = (
+        args.def_model_l5
+        or os.environ.get("LLM_DEF_MODEL_L5", "")
+        or config.get("def_model_l5", "")
+        or MODEL_DEF_L5
+    ).strip()
+
+    ladder_override = (
+        args.attacker_ladder
+        or os.environ.get("LLM_ATTACKER_MODEL_LADDER", "")
+        or config.get("attacker_model_ladder", "")
     )
+    parsed_ladder = parse_ladder(ladder_override)
+    if parsed_ladder:
+        ATTACKER_MODEL_LADDER = parsed_ladder
+
+    # Keep LEVELS in sync with possible runtime defender overrides.
+    LEVELS[3]["model"] = MODEL_DEF_L3
+    LEVELS[4]["model"] = MODEL_DEF_L4
+    LEVELS[5]["model"] = MODEL_DEF_L5
+
+    # API key resolution:
+    # - openrouter keeps old defaults.
+    # - custom_openai accepts OPENAI_API_KEY / LLM_API_KEY / config api_key.
+    if API_PROVIDER == "openrouter":
+        api_key = (
+            args.key
+            or os.environ.get("OPENROUTER_API_KEY", "")
+            or config.get("openrouter_api_key", "")
+            or "sk-or-XXXXXXX"
+        )
+    else:
+        api_key = (
+            args.key
+            or os.environ.get("LLM_API_KEY", "")
+            or os.environ.get("OPENAI_API_KEY", "")
+            or config.get("api_key", "")
+            or "sk-or-XXXXXXX"
+        )
 
     if args.reset:
         path = memory_path(args.level)
@@ -638,11 +773,25 @@ def main():
             print(f"No había memoria para el nivel {args.level}.")
         return
 
-    if "XXXXXXX" in api_key:
-        print(f"{R}Falta la API key de OpenRouter.{RST}")
-        print(f"  Opción 1: crea {CONFIG_PATH} con {{\"openrouter_api_key\": \"sk-or-...\"}}")
-        print("  Opción 2: exporta OPENROUTER_API_KEY=sk-or-...")
-        print("  Opción 3: pasa --key sk-or-...")
+    if API_PROVIDER not in ("openrouter", "custom_openai"):
+        print(f"{R}Proveedor inválido: {API_PROVIDER}{RST}")
+        print("  Valores válidos: openrouter | custom_openai")
+        sys.exit(1)
+
+    if not api_key or "XXXXXXX" in api_key:
+        print(f"{R}Falta API key para el proveedor seleccionado.{RST}")
+        if API_PROVIDER == "openrouter":
+            print(f"  Opción 1: crea {CONFIG_PATH} con {{\"openrouter_api_key\": \"sk-or-...\"}}")
+            print("  Opción 2: exporta OPENROUTER_API_KEY=sk-or-...")
+            print("  Opción 3: pasa --key sk-or-...")
+        else:
+            print(f"  Opción 1: crea {CONFIG_PATH} con {{\"api_key\": \"<token>\"}}")
+            print("  Opción 2: exporta LLM_API_KEY=<token> (o OPENAI_API_KEY)")
+            print("  Opción 3: pasa --key <token>")
+        sys.exit(1)
+
+    if not API_BASE_URL:
+        print(f"{R}Falta URL base de chat completions (--base-url / LLM_API_BASE_URL / config).{RST}")
         sys.exit(1)
 
     if args.rounds < 1 or args.rounds > 200:
@@ -658,6 +807,7 @@ def main():
         sys.exit(1)
 
     # Tabla de niveles al arrancar
+    print(f"{DIM}Proveedor API: {API_PROVIDER} | Endpoint: {API_BASE_URL}{RST}")
     print(f"\n{DIM}{'─'*72}")
     print(f"  {'N':>2}  {'Nombre':12}  {'Modelo defensor':28}  Descripción")
     print(f"{'─'*72}{RST}")
